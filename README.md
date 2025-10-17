@@ -1,5 +1,5 @@
 # PrEugen_LightSourse
-基于Arduino的WS2812B灯板控制器（8x16网格），采用三个旋转编码器进行RGB颜色控制和专用定时器模式。系统提供直观的LED颜色控制和精确的定时功能。
+基于Arduino的WS2812B灯板控制器（8x16网格），用于彩色负片胶卷放大，采用三个旋转编码器进行RGB颜色控制和专用定时器模式。系统提供直观的LED颜色控制和精确的定时功能。
 
 功能
 
@@ -26,7 +26,7 @@
 
 v1.0 发布了项目
 
-A sophisticated Arduino-based controller for WS2812B LED panels (8x16 grid) featuring three rotary encoders for RGB color control and a dedicated timer mode. The system provides intuitive control over LED colors and precise timing functions.
+A sophisticated Arduino-based controller for WS2812B LED panels (8x16 grid) featuring three rotary encoders for RGB color control and a dedicated timer mode，for enlarge colorful negative films. The system provides intuitive control over LED colors and precise timing functions.
 
 Features
 

@@ -24,7 +24,9 @@
     外部5V电源
     
 
-v1.0 发布了项目
+更新日志
+
+    v1.0 发布了项目
 
 A Arduino-based controller for WS2812B LED panels (8x16 grid) featuring three rotary encoders for RGB color control and a dedicated timer mode，for enlarge colorful negative films. The system provides intuitive control over LED colors and precise timing functions.
 
@@ -50,6 +52,8 @@ Hardware Requirements
     0.96" OLED Display (SSD1306, 128x64)
     
     External 5V power supply (recommended for full brightness)
+
+Update Log
     
-v1.0 Updated the project
+    v1.0 Updated the project
 

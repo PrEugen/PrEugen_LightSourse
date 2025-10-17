@@ -26,7 +26,7 @@
 
 v1.0 发布了项目
 
-A sophisticated Arduino-based controller for WS2812B LED panels (8x16 grid) featuring three rotary encoders for RGB color control and a dedicated timer mode，for enlarge colorful negative films. The system provides intuitive control over LED colors and precise timing functions.
+A Arduino-based controller for WS2812B LED panels (8x16 grid) featuring three rotary encoders for RGB color control and a dedicated timer mode，for enlarge colorful negative films. The system provides intuitive control over LED colors and precise timing functions.
 
 Features
 

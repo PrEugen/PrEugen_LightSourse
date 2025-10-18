@@ -39,8 +39,26 @@ uint8_t redValue = 255;
 uint8_t greenValue = 255;
 uint8_t blueValue = 255;
 
+// EEPROM写入保护
+unsigned long lastColorChangeTime = 0;
+const unsigned long EEPROM_SAVE_DELAY = 3000; // 3秒延迟
+boolean needsSave = false;
+
+// 预设相关参数
+#define PRESET_COUNT 6
+#define PRESET_NAME_LENGTH 8
+struct Preset {
+  char name[PRESET_NAME_LENGTH];
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+};
+Preset presets[PRESET_COUNT];
+int currentPresetIndex = 0;
+boolean presetModified = false;
+
 // 定时器专用模式参数
-float timerDuration = 10.0;  // 默认10秒
+float timerDuration = 10.0;
 float timerRemaining = 0.0;
 boolean timerRunning = false;
 boolean timerFinished = false;
@@ -60,14 +78,23 @@ boolean EncoderGSWState = 0;
 boolean EncoderBSWState = 0;
 
 // 显示模式
-boolean colorMode = true;     // 颜色调节模式
-boolean timerMode = false;    // 定时器专用模式
+boolean colorMode = true;
+boolean timerMode = false;
+boolean presetMode = false;
+boolean presetEditMode = false;
+boolean presetNameEditMode = false;
+
+// 命名相关
+char nameChars[37] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
+int currentCharIndex = 0;
+int currentNamePosition = 0;
 
 // EEPROM地址
 #define RED_ADDR     0
 #define GREEN_ADDR   1
 #define BLUE_ADDR    2
 #define TIMER_ADDR   3
+#define PRESET_BASE_ADDR 100  // 预设存储起始地址
 
 // WS2812B时序参数
 #define T0H  400
@@ -99,8 +126,9 @@ void setup() {
   display.setTextColor(WHITE);
   display.clearDisplay();
 
-  // 从EEPROM读取保存的设置
+  // 从EEPROM读取保存的设置和预设
   loadSettings();
+  loadPresets();
   
   // 初始状态：灯板熄灭
   sendColor(0, 0, 0);
@@ -108,10 +136,10 @@ void setup() {
   // 显示启动画面
   display.setTextSize(2);
   display.setCursor(10, 20);
-  display.println(F("定时器模式"));
+  display.println(F("RGB控制器"));
   display.setTextSize(1);
   display.setCursor(15, 50);
-  display.println(F("设置期间灯板熄灭"));
+  display.println(F("预设功能已启用"));
   display.display();
   delay(2000);
   
@@ -125,13 +153,11 @@ void setup() {
 void sendByte(uint8_t byte) {
   for (int i = 7; i >= 0; i--) {
     if (byte & (1 << i)) {
-      // 发送1码
       digitalWrite(LED_PIN, HIGH);
       delayMicroseconds(1);
       digitalWrite(LED_PIN, LOW);
       delayMicroseconds(1);
     } else {
-      // 发送0码
       digitalWrite(LED_PIN, HIGH);
       delayMicroseconds(0);
       digitalWrite(LED_PIN, LOW);
@@ -144,7 +170,7 @@ void sendColor(uint8_t r, uint8_t g, uint8_t b) {
   noInterrupts();
   
   for (int i = 0; i < LED_COUNT; i++) {
-    sendByte(g); // GRB顺序
+    sendByte(g);
     sendByte(r);
     sendByte(b);
   }
@@ -158,6 +184,7 @@ void sendColor(uint8_t r, uint8_t g, uint8_t b) {
 void loop() {
   readEncoders();
   processTimer();
+  checkEEPROMSave();
   updateDisplay();
   delay(50);
 }
@@ -179,25 +206,11 @@ void readSingleEncoder(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
   if (clkState != lastState) {
     if (dtState != clkState) {
       // 顺时针旋转
-      if (colorMode) {
-        // 颜色模式：调整颜色
-        adjustColor(colorIndex, 1);
-        updateLEDColor(); // 实时预览颜色
-      } else {
-        // 定时器模式：调整时间
-        adjustTimer(0.1);
-      }
+      handleEncoderRotation(1, colorIndex);
     } else {
       // 逆时针旋转
-      if (colorMode) {
-        adjustColor(colorIndex, -1);
-        updateLEDColor(); // 实时预览颜色
-      } else {
-        // 定时器模式：调整时间
-        adjustTimer(-0.1);
-      }
+      handleEncoderRotation(-1, colorIndex);
     }
-    saveSettings();
   }
   lastState = clkState;
   
@@ -205,41 +218,7 @@ void readSingleEncoder(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
   swState = digitalRead(swPin);
   if (swState == 0 && !buttonPressed) {
     buttonPressed = true;
-    
-    if (colorIndex == 0) {
-      // 红色编码器：切换颜色模式/定时器模式
-      colorMode = !colorMode;
-      timerMode = !colorMode;
-      
-      // 模式切换时处理灯板状态
-      if (colorMode) {
-        // 切换到颜色模式：点亮灯板显示当前颜色
-        updateLEDColor();
-      } else {
-        // 切换到定时器模式：熄灭灯板
-        sendColor(0, 0, 0);
-      }
-    } 
-    else if (colorIndex == 1) {
-      // 绿色编码器
-      if (timerMode && !timerRunning && !timerFinished) {
-        // 定时器模式：启动倒计时
-        startTimer();
-      } else if (timerMode && timerRunning) {
-        // 定时器运行中：停止计时
-        stopTimer();
-      }
-    } 
-    else if (colorIndex == 2) {
-      // 蓝色编码器：重置功能
-      if (colorMode) {
-        resetColor(colorIndex);
-      } else if (timerMode && timerFinished) {
-        // 定时结束状态：重置定时器
-        resetTimer();
-      }
-    }
-    
+    handleEncoderClick(colorIndex);
     delay(200);
   } else if (swState == 1) {
     buttonPressed = false;
@@ -253,21 +232,7 @@ void readSingleEncoder(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
     }
     
     if (millis() - pressTime[colorIndex] > 1000) {
-      if (colorIndex == 0) {
-        // 红色编码器长按：重置所有颜色为白色
-        resetAllColors();
-      } else if (colorIndex == 1) {
-        // 绿色编码器长按：快速设置常用定时时间
-        if (timerMode) {
-          quickSetTimer();
-        }
-      } else if (colorIndex == 2) {
-        // 蓝色编码器长按：保存并应用当前颜色
-        saveSettings();
-        if (colorMode) {
-          updateLEDColor();
-        }
-      }
+      handleEncoderLongPress(colorIndex);
       pressTime[colorIndex] = 0;
       delay(200);
     }
@@ -277,41 +242,208 @@ void readSingleEncoder(uint8_t clkPin, uint8_t dtPin, uint8_t swPin,
   }
 }
 
+void handleEncoderRotation(int direction, uint8_t encoderIndex) {
+  if (presetNameEditMode) {
+    // 命名编辑模式
+    if (encoderIndex == 0) { // 红色编码器选择字符
+      currentCharIndex = (currentCharIndex + direction + 36) % 36;
+      presetModified = true;
+    } else if (encoderIndex == 1) { // 绿色编码器移动光标
+      currentNamePosition = constrain(currentNamePosition + direction, 0, PRESET_NAME_LENGTH - 2);
+      presetModified = true;
+    }
+    return;
+  }
+  
+  if (presetEditMode) {
+    // 预设编辑模式
+    if (encoderIndex == 0) {
+      adjustColor(0, direction);
+      presets[currentPresetIndex].red = redValue;
+      presetModified = true;
+    } else if (encoderIndex == 1) {
+      adjustColor(1, direction);
+      presets[currentPresetIndex].green = greenValue;
+      presetModified = true;
+    } else if (encoderIndex == 2) {
+      adjustColor(2, direction);
+      presets[currentPresetIndex].blue = blueValue;
+      presetModified = true;
+    }
+    updateLEDColor();
+    return;
+  }
+  
+  if (presetMode) {
+    // 预设浏览模式
+    if (encoderIndex == 0) {
+      currentPresetIndex = (currentPresetIndex + direction + PRESET_COUNT) % PRESET_COUNT;
+      updateLEDColor();
+    }
+    return;
+  }
+  
+  if (colorMode) {
+    // 颜色模式
+    adjustColor(encoderIndex, direction);
+    updateLEDColor();
+  } else if (timerMode) {
+    // 定时器模式
+    if (encoderIndex == 0) {
+      adjustTimer(direction * 0.1);
+    }
+  }
+}
+
+void handleEncoderClick(uint8_t encoderIndex) {
+  if (presetNameEditMode) {
+    // 命名编辑模式确认
+    if (encoderIndex == 2) { // 蓝色编码器确认命名
+      presetNameEditMode = false;
+      // 更新预设名称
+      presets[currentPresetIndex].name[currentNamePosition] = nameChars[currentCharIndex];
+      presetModified = true;
+    }
+    return;
+  }
+  
+  if (presetEditMode) {
+    // 预设编辑模式
+    if (encoderIndex == 0) { // 红色编码器切换命名模式
+      presetNameEditMode = true;
+      currentNamePosition = 0;
+      currentCharIndex = 0;
+    } else if (encoderIndex == 2) { // 蓝色编码器保存并退出
+      presetEditMode = false;
+      // 只在退出时保存预设到EEPROM
+      savePreset(currentPresetIndex);
+    }
+    return;
+  }
+  
+  if (presetMode) {
+    // 预设浏览模式
+    if (encoderIndex == 0) { // 红色编码器进入编辑
+      presetEditMode = true;
+      // 进入预设编辑时使用当前颜色值
+      presets[currentPresetIndex].red = redValue;
+      presets[currentPresetIndex].green = greenValue;
+      presets[currentPresetIndex].blue = blueValue;
+      presetModified = true;
+      updateLEDColor();
+    } else if (encoderIndex == 1) { // 绿色编码器应用预设
+      loadPreset(currentPresetIndex);
+      updateLEDColor();
+      // 应用预设后立即保存主颜色到EEPROM
+      immediateEEPROMSave();
+    } else if (encoderIndex == 2) { // 蓝色编码器删除预设
+      deletePreset(currentPresetIndex);
+    }
+    return;
+  }
+  
+  // 主模式切换
+  if (encoderIndex == 0) {
+    // 红色编码器：循环切换模式
+    if (colorMode) {
+      // 从颜色模式切换到其他模式时立即保存
+      immediateEEPROMSave();
+      colorMode = false;
+      timerMode = true;
+      presetMode = false;
+      sendColor(0, 0, 0);
+    } else if (timerMode) {
+      colorMode = false;
+      timerMode = false;
+      presetMode = true;
+      // 进入预设模式时显示当前预设颜色
+      updateLEDColor();
+    } else {
+      colorMode = true;
+      timerMode = false;
+      presetMode = false;
+      updateLEDColor();
+    }
+  } else if (encoderIndex == 1) {
+    // 绿色编码器
+    if (timerMode && !timerRunning && !timerFinished) {
+      startTimer();
+    } else if (timerMode && timerRunning) {
+      stopTimer();
+    }
+  }
+}
+
+void handleEncoderLongPress(uint8_t encoderIndex) {
+  if (presetMode || presetEditMode || presetNameEditMode) {
+    // 在预设相关模式下，长按红色编码器返回主模式
+    if (encoderIndex == 0) {
+      // 如果预设已修改但未保存，询问是否保存
+      if (presetModified) {
+        // 这里可以添加确认保存的提示，但为了简化，我们直接保存
+        savePreset(currentPresetIndex);
+      }
+      presetMode = false;
+      presetEditMode = false;
+      presetNameEditMode = false;
+      colorMode = true;
+      updateLEDColor();
+    }
+    return;
+  }
+  
+  if (encoderIndex == 0) {
+    // 红色编码器长按：重置所有颜色为白色
+    resetAllColors();
+    updateLEDColor();
+    // 重置后立即保存
+    immediateEEPROMSave();
+  } else if (encoderIndex == 1) {
+    // 绿色编码器长按：快速设置常用定时时间
+    if (timerMode) {
+      quickSetTimer();
+      // 快速设置后立即保存
+      immediateEEPROMSave();
+    }
+  } else if (encoderIndex == 2) {
+    // 蓝色编码器长按：保存当前颜色到当前预设
+    saveToCurrentPreset();
+    // 保存预设后立即保存到EEPROM
+    immediateEEPROMSave();
+  }
+}
+
 void adjustColor(uint8_t channel, int delta) {
   switch(channel) {
     case 0: redValue = constrain(redValue + delta, 0, 255); break;
     case 1: greenValue = constrain(greenValue + delta, 0, 255); break;
     case 2: blueValue = constrain(blueValue + delta, 0, 255); break;
   }
+  
+  // 标记需要保存，并重置计时器
+  if (!presetEditMode) { // 在预设编辑模式下不触发主颜色保存
+    needsSave = true;
+    lastColorChangeTime = millis();
+  }
 }
 
-// 更新LED颜色（仅用于颜色模式预览）
+// 更新LED颜色
 void updateLEDColor() {
-  if (colorMode && !timerRunning) {
+  if ((colorMode || presetMode || presetEditMode) && !timerRunning) {
     sendColor(redValue, greenValue, blueValue);
   }
-}
-
-void resetColor(uint8_t channel) {
-  switch(channel) {
-    case 0: redValue = 0; break;
-    case 1: greenValue = 0; break;
-    case 2: blueValue = 0; break;
-  }
-  updateLEDColor();
-  saveSettings();
 }
 
 void resetAllColors() {
   redValue = greenValue = blueValue = 255;
   updateLEDColor();
-  saveSettings();
+  scheduleEEPROMSave();
 }
 
 void adjustTimer(float delta) {
   if (timerMode && !timerRunning) {
     timerDuration = constrain(timerDuration + delta, 0.1, 60.0);
-    saveSettings();
+    scheduleEEPROMSave();
   }
 }
 
@@ -321,8 +453,6 @@ void startTimer() {
     timerFinished = false;
     timerStartTime = millis();
     timerRemaining = timerDuration;
-    
-    // 启动定时器时点亮灯板
     sendColor(redValue, greenValue, blueValue);
   }
 }
@@ -330,7 +460,6 @@ void startTimer() {
 void stopTimer() {
   if (timerRunning) {
     timerRunning = false;
-    // 停止定时器时熄灭灯板
     sendColor(0, 0, 0);
   }
 }
@@ -339,13 +468,11 @@ void resetTimer() {
   timerRunning = false;
   timerFinished = false;
   timerRemaining = 0;
-  // 重置时熄灭灯板
   sendColor(0, 0, 0);
 }
 
 void quickSetTimer() {
   if (timerMode && !timerRunning) {
-    // 快速设置常用定时时间
     if (timerDuration < 5.0) {
       timerDuration = 5.0;
     } else if (timerDuration < 15.0) {
@@ -355,7 +482,7 @@ void quickSetTimer() {
     } else {
       timerDuration = 60.0;
     }
-    saveSettings();
+    scheduleEEPROMSave();
   }
 }
 
@@ -366,83 +493,196 @@ void processTimer() {
     timerRemaining = timerDuration - elapsed;
     
     if (timerRemaining <= 0) {
-      // 定时时间到 - 直接熄灭灯板，不闪烁
       timerRunning = false;
       timerFinished = true;
       timerRemaining = 0;
-      
-      // 定时结束时直接熄灭灯板
       sendColor(0, 0, 0);
     }
   }
+}
+
+void checkEEPROMSave() {
+  if (needsSave && (millis() - lastColorChangeTime > EEPROM_SAVE_DELAY)) {
+    saveSettings();
+    needsSave = false;
+  }
+}
+
+void scheduleEEPROMSave() {
+  needsSave = true;
+  lastColorChangeTime = millis();
+}
+
+// 立即保存到EEPROM
+void immediateEEPROMSave() {
+  saveSettings();
+  needsSave = false;
+}
+
+// 预设功能
+void loadPreset(int index) {
+  redValue = presets[index].red;
+  greenValue = presets[index].green;
+  blueValue = presets[index].blue;
+  updateLEDColor();
+}
+
+void saveToCurrentPreset() {
+  presets[currentPresetIndex].red = redValue;
+  presets[currentPresetIndex].green = greenValue;
+  presets[currentPresetIndex].blue = blueValue;
+  savePreset(currentPresetIndex);
+}
+
+void deletePreset(int index) {
+  // 重置为默认值
+  presets[index].red = 255;
+  presets[index].green = 255;
+  presets[index].blue = 255;
+  strcpy(presets[index].name, "PRESET");
+  char numStr[2];
+  itoa(index + 1, numStr, 10);
+  strcat(presets[index].name, numStr);
+  savePreset(index);
 }
 
 void updateDisplay() {
   display.clearDisplay();
   display.setTextColor(WHITE);
 
-  if (colorMode) {
-    // 颜色调节模式界面
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println(F("颜色调节模式"));
-    display.drawLine(0, 10, 128, 10, WHITE);
-
-    display.setCursor(0, 15);
-    display.print(F("红:"));
-    display.print(redValue);
-    display.print(F(" 绿:"));
-    display.print(greenValue);
-    
-    display.setCursor(0, 25);
-    display.print(F("蓝:"));
-    display.print(blueValue);
-    
-    display.setCursor(0, 50);
-    display.println(F("红:模式 绿:- 蓝:重置单色"));
-    
-    display.setCursor(0, 60);
-    display.println(F("长按红:白 绿:- 蓝:保存"));
-  } 
-  else if (timerMode) {
-    // 定时器模式界面
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println(F("定时器模式"));
-    display.drawLine(0, 10, 128, 10, WHITE);
-
-    // 显示设置的时间
-    display.setTextSize(2);
-    display.setCursor(20, 20);
-    display.print(timerDuration, 1);
-    display.println(F(" 秒"));
-
-    display.setTextSize(1);
-    
-    // 显示状态
-    display.setCursor(0, 45);
-    if (timerRunning) {
-      display.print(F("状态: 运行中 "));
-      display.print(timerRemaining, 1);
-      display.println(F("秒"));
-    } else if (timerFinished) {
-      display.println(F("状态: 定时完成!"));
-    } else {
-      display.println(F("状态: 就绪 (灯板熄灭)"));
-    }
-
-    // 操作提示
-    display.setCursor(0, 55);
-    if (!timerRunning && !timerFinished) {
-      display.println(F("红:模式 绿:启动 蓝:-"));
-    } else if (timerRunning) {
-      display.println(F("红:模式 绿:停止 蓝:-"));
-    } else if (timerFinished) {
-      display.println(F("红:模式 绿:- 蓝:重置"));
-    }
+  if (presetNameEditMode) {
+    displayPresetNameEdit();
+  } else if (presetEditMode) {
+    displayPresetEdit();
+  } else if (presetMode) {
+    displayPresetMode();
+  } else if (colorMode) {
+    displayColorMode();
+  } else if (timerMode) {
+    displayTimerMode();
   }
 
   display.display();
+}
+
+void displayColorMode() {
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(F("颜色调节模式"));
+  display.drawLine(0, 10, 128, 10, WHITE);
+
+  display.setCursor(0, 20);
+  display.print(F("红: "));
+  display.print(redValue);
+  display.print(F("/255"));
+  
+  display.setCursor(0, 35);
+  display.print(F("绿: "));
+  display.print(greenValue);
+  display.print(F("/255"));
+  
+  display.setCursor(0, 50);
+  display.print(F("蓝: "));
+  display.print(blueValue);
+  display.print(F("/255"));
+}
+
+void displayTimerMode() {
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(F("定时器模式"));
+  display.drawLine(0, 10, 128, 10, WHITE);
+
+  display.setTextSize(2);
+  display.setCursor(20, 25);
+  display.print(timerDuration, 1);
+  display.println(F(" 秒"));
+
+  display.setTextSize(1);
+  display.setCursor(0, 50);
+  if (timerRunning) {
+    display.print(F("运行中: "));
+    display.print(timerRemaining, 1);
+    display.println(F("秒"));
+  } else if (timerFinished) {
+    display.println(F("定时完成"));
+  } else {
+    display.println(F("就绪 - 灯板熄灭"));
+  }
+}
+
+void displayPresetMode() {
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(F("预设模式"));
+  display.drawLine(0, 10, 128, 10, WHITE);
+
+  display.setCursor(0, 20);
+  display.print(F("预设 "));
+  display.print(currentPresetIndex + 1);
+  display.print(F("/"));
+  display.print(PRESET_COUNT);
+  
+  display.setCursor(0, 35);
+  display.print(F("名称: "));
+  display.print(presets[currentPresetIndex].name);
+  
+  display.setCursor(0, 50);
+  display.print(F("RGB: "));
+  display.print(presets[currentPresetIndex].red);
+  display.print(F(","));
+  display.print(presets[currentPresetIndex].green);
+  display.print(F(","));
+  display.print(presets[currentPresetIndex].blue);
+}
+
+void displayPresetEdit() {
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print(F("编辑预设 "));
+  display.print(currentPresetIndex + 1);
+  if (presetModified) {
+    display.print(F(" *")); // 显示修改标记
+  }
+  display.drawLine(0, 10, 128, 10, WHITE);
+
+  display.setCursor(0, 20);
+  display.print(F("名称: "));
+  display.print(presets[currentPresetIndex].name);
+  
+  display.setCursor(0, 35);
+  display.print(F("红: "));
+  display.print(redValue);
+  display.print(F("/255"));
+  
+  display.setCursor(0, 50);
+  display.print(F("绿: "));
+  display.print(greenValue);
+  display.print(F("/255 蓝: "));
+  display.print(blueValue);
+  display.print(F("/255"));
+}
+
+void displayPresetNameEdit() {
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println(F("命名预设"));
+  display.drawLine(0, 10, 128, 10, WHITE);
+
+  // 显示当前名称
+  display.setCursor(0, 25);
+  for (int i = 0; i < PRESET_NAME_LENGTH - 1; i++) {
+    if (i == currentNamePosition) {
+      display.setTextColor(BLACK, WHITE); // 反白显示当前光标位置
+    }
+    display.print(presets[currentPresetIndex].name[i]);
+    display.setTextColor(WHITE);
+  }
+  
+  // 显示当前可选字符
+  display.setCursor(0, 45);
+  display.print(F("字符: "));
+  display.print(nameChars[currentCharIndex]);
 }
 
 void loadSettings() {
@@ -462,4 +702,28 @@ void saveSettings() {
   
   uint16_t timerTenths = round(timerDuration * 10);
   EEPROM.put(TIMER_ADDR, timerTenths);
+}
+
+void loadPresets() {
+  for (int i = 0; i < PRESET_COUNT; i++) {
+    int addr = PRESET_BASE_ADDR + i * sizeof(Preset);
+    EEPROM.get(addr, presets[i]);
+    
+    // 如果名称为空，设置默认名称
+    if (presets[i].name[0] == 0 || presets[i].name[0] == 255) {
+      strcpy(presets[i].name, "PRESET");
+      char numStr[2];
+      itoa(i + 1, numStr, 10);
+      strcat(presets[i].name, numStr);
+      presets[i].red = 255;
+      presets[i].green = 255;
+      presets[i].blue = 255;
+    }
+  }
+}
+
+void savePreset(int index) {
+  int addr = PRESET_BASE_ADDR + index * sizeof(Preset);
+  EEPROM.put(addr, presets[index]);
+  presetModified = false;
 }

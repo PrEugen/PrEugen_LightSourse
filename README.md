@@ -9,7 +9,7 @@
     
     定时器模式：设置倒计时时间（0.1-60.0秒），自动控制LED状态
     
-    记忆功能：自动保存RGB值和定时设置到EEPROM
+    预设模式：存储胶卷放大的RGB参数便于调用
 
 硬件要求
 
@@ -28,6 +28,10 @@
 
     v1.0 发布了项目
 
+    v1.1 优化了EEPROM存储逻辑，防止写入次数过多
+
+    v2.0 加入了预设模式，用以存储胶卷放大的RGB参数
+
 A Arduino-based controller for WS2812B LED panels (8x16 grid) featuring three rotary encoders for RGB color control and a dedicated timer mode，for enlarge colorful negative films. The system provides intuitive control over LED colors and precise timing functions.
 
 Features
@@ -38,7 +42,7 @@ Features
     
     Timer Mode: Set countdown duration (0.1-60.0 seconds) with automatic LED control
     
-    Memory Function: Automatically saves RGB values and timer settings to EEPROM
+    Preset mode: Store the RGB parameters for film enlargement for easy access.
     
 
 Hardware Requirements
@@ -56,4 +60,8 @@ Hardware Requirements
 Update Log
     
     v1.0 Updated the project
+
+    v1.1 Optimized the EEPROM storage logic to prevent excessive write operations.
+
+    v2.0 A preset mode has been added to store the RGB parameters for film enlargement.
 
